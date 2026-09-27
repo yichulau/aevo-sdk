@@ -109,6 +109,110 @@ See `order_rest_example.py` for an example flow of how to create and cancel an o
 
 It can be tested by running `python order_rest_example.py`.
 
+## Builder Codes
+
+Builder Codes let an app (a "builder") attach a builder fee to its users' perpetual orders once the user has approved that builder. The builder fee is separate from the Aevo fee. It is debited from the user in USDC and credited to the builder's fee account. See `builder_example.py` for a full flow. It is dry-run by default and only sends when `SEND=1` is set.
+
+A builder is identified by its `builder_id` (`builder_<16 hex>`, which is what gets signed) and by an optional public, immutable `builder_code` (for example `copilot`). SDK methods that take `builder` accept either one. A code is resolved to its `builder_id` with `GET /builders/{code}`. On hot order paths, pass the `builder_id` directly to skip that lookup.
+
+### Fee units
+
+Rates are decimal fractions with at most 6 decimals: `0.0005` is 5 bps. The API takes them as decimal strings (`"0.0005"`), and EIP-712 signs the raw 6-decimal integer (`500`). Every fee argument has a `*_bps` form and a `*_rate` form. Pass exactly one of them. Floats are rejected, so pass a `str`, `int` or `Decimal`.
+
+```python
+from aevo import bps_to_rate, rate_to_raw
+
+bps_to_rate(5)         # "0.0005"
+rate_to_raw("0.0005")  # 500
+```
+
+Read the protocol cap before choosing fees. An approval or order fee above `max_fee_rate_perps` is rejected, and a `null` cap means builder fees are disabled:
+
+```python
+aevo.get_builder_config()  # {"max_fee_rate_perps": "0.0005", "min_create_balance": "100"}
+```
+
+### Registration (builder)
+
+Any account can register one builder for itself, using its own API key. Registration needs a USDC balance of at least `min_create_balance`. If that value is `null`, self-service registration is disabled.
+
+```python
+aevo.register_builder(builder_code="copilot", name="Copilot")
+# {"success": true, "builder_id": "builder_...", "builder_code": "copilot"}
+aevo.get_builder("copilot")  # public profile: builder_id, builder_code, name, status
+```
+
+`builder_code` must match `^[a-z0-9]{3,16}$`. It must also be unique and not reserved (`aevo`, `admin`, `api`, `builder`, `builders`), and it cannot be changed later.
+
+### Approval (user)
+
+The user approves a builder once, up to a maximum fee rate. The approval is signed with the wallet key, so `wallet_private_key` must be set, and a signing key is not accepted. The nonce is the current time in unix milliseconds.
+
+```python
+aevo = AevoClient(
+    signing_key=os.environ["AEVO_SIGNING_KEY"],
+    wallet_address=os.environ["AEVO_WALLET_ADDRESS"],
+    wallet_private_key=os.environ["AEVO_WALLET_PRIVATE_KEY"],
+    api_key=os.environ["AEVO_API_KEY"],
+    api_secret=os.environ["AEVO_API_SECRET"],
+    env="testnet",
+)
+aevo.approve_builder("copilot", max_fee_bps=5)  # POST /builder/approve
+aevo.get_builder_approvals()                    # GET /account/builder-approvals
+aevo.revoke_builder("copilot")                  # POST /builder/revoke
+```
+
+### Attribution on orders
+
+Pass `builder` and one of `builder_fee_bps` or `builder_fee_rate` to `rest_create_order`, `rest_create_market_order` or the websocket `create_order`. You can also pass them to `create_order_rest_json` or `create_order_ws_json`. The order is then signed with the builder `Order` EIP-712 type, which adds `builderId` (string) and `builderFeeRate` (uint256, raw 6-decimal) after `timestamp`, and the payload includes `builder_id` and `builder_fee_rate`. Without `builder`, orders are signed and sent exactly as before.
+
+```python
+aevo.rest_create_order(
+    instrument_id=2054,
+    is_buy=True,
+    limit_price=1200,
+    quantity=0.01,
+    post_only=False,
+    builder="builder_0123456789abcdef",
+    builder_fee_bps=3,
+)
+```
+
+The order fee must be at or below both the user's approved max and the protocol cap. Builder attribution applies only to signed perpetual orders.
+
+### Error codes
+
+| Code | Meaning |
+| --- | --- |
+| `BUILDER_NOT_FOUND` | Unknown builder, or the report caller is not a builder fee account |
+| `BUILDER_NOT_ACTIVE` | The builder is suspended or disabled |
+| `BUILDER_NOT_APPROVED` | The user has not approved this builder |
+| `BUILDER_FEE_EXCEEDS_USER_LIMIT` | The order fee is above the user's approved max |
+| `BUILDER_FEE_EXCEEDS_AEVO_LIMIT` | The fee is above the protocol cap, or the cap is unset |
+| `BUILDER_INVALID_FEE_RATE` | The rate is malformed |
+| `BUILDER_INVALID_SIGNATURE`, `BUILDER_INVALID_NONCE` | The approval signature is invalid, or the nonce was replayed |
+| `BUILDER_NOT_SUPPORTED` | Builder fields were sent on an unsupported path |
+| `BUILDER_INVALID_CODE`, `BUILDER_CODE_TAKEN`, `BUILDER_INVALID_NAME` | Registration input was rejected |
+| `BUILDER_ALREADY_EXISTS` | The account already owns a builder |
+| `BUILDER_SELF_SERVICE_DISABLED`, `BUILDER_INSUFFICIENT_BALANCE` | Registration is disabled, or the USDC balance is below `min_create_balance` |
+| `INVALID_PERIOD`, `CSV_RANGE_TOO_LARGE` | The reporting window is invalid, or the window is too large for the CSV export (50,000 rows max) |
+
+### Reporting (builder)
+
+Reporting uses the builder fee account's own API key, and the builder is derived from that key. Pick a window with either `period` (`24h`, `7d`, `30d` or `90d`) or `start_time` and `end_time` in unix nanoseconds, and don't combine the two.
+
+```python
+aevo.get_builder_stats(period="30d")
+aevo.get_builder_markets(start_time=start_ns, end_time=end_ns)
+aevo.get_builder_users(period="7d", limit=50, cursor=None)  # paginate with next_cursor
+aevo.get_builder_fills(start_time=start_ns, end_time=end_ns, instrument="ETH-PERP")
+aevo.download_builder_fills_csv("fills.csv", start_time=start_ns, end_time=end_ns)
+```
+
+### Read-only API keys
+
+All reporting endpoints (`/builder/stats`, `/builder/markets`, `/builder/users` and `/builder/fills`, including CSV) and `get_builder_approvals` are GET requests, so a read-only API key works for them. A dashboard or accounting job should use one. Registration, approve, revoke and orders need a key that can trade.
+
 ## Generating infinite expiry signing key
 
 Normally signing keys generated via the UI expire after 1 week. However, you can generate a signing key that never expires by using the `generate_infinite_expiry_signing_key.py` script.
