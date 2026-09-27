@@ -14,7 +14,7 @@ from eth_account import Account
 from hexbytes import HexBytes
 
 import aevo
-from aevo import AevoClient, bps_to_rate, rate_to_raw
+from aevo import AevoClient, bps_to_rate, rate_to_raw, validate_builder_id
 
 # Public, well-known test key (web3.py docs). Never holds funds.
 TEST_KEY = "0x4c0883a69102937d6231471b5dbb6204fe5129617082792ae468d01a3f362318"
@@ -175,16 +175,14 @@ def test_rest_order_with_builder(client, kwargs):
     assert recovers_to(order_id, payload["signature"]) == TEST_ADDRESS
 
 
-def test_ws_order_with_builder_code(client):
-    client.client.responses[("GET", "https://api-testnet.aevo.xyz/builders/copilot")] = (
-        FakeResponse(200, {"builder_id": BUILDER_ID, "builder_code": "copilot"})
-    )
+def test_ws_order_with_builder(client):
     payload, order_id = client.create_order_ws_json(
-        2054, True, 1700, 0.01, builder="copilot", builder_fee_bps=3
+        2054, True, 1700, 0.01, builder=BUILDER_ID, builder_fee_bps=3
     )
     assert order_id == GO_BUILDER_ORDER_HASH
     assert payload["builder_id"] == BUILDER_ID
     assert payload["builder_fee_rate"] == "0.0003"
+    assert client.client.calls == []
 
 
 def test_order_builder_argument_validation(client):
@@ -239,47 +237,47 @@ def test_floats_are_rejected(bad):
         bps_to_rate(bad)
 
 
-# Builder id vs code resolution
+# Builder id validation
 
 
-def test_resolve_builder_id_passes_through_without_http(client):
-    assert client.resolve_builder_id(BUILDER_ID) == BUILDER_ID
+def test_validate_builder_id_accepts_well_formed_id():
+    assert validate_builder_id(BUILDER_ID) == BUILDER_ID
+
+
+def test_validate_builder_id_rejects_none():
+    # On order methods builder=None means "no builder"; see
+    # test_order_builder_argument_validation.
+    with pytest.raises(ValueError, match="builder_id"):
+        validate_builder_id(None)
+
+
+@pytest.mark.parametrize(
+    "bad",
+    ["copilot", "", 123, "builder_0123456789ABCDEF", "builder_0123456789abcde",
+     "builder_0123456789abcdef0", " builder_0123456789abcdef", "builder_0123456789abcdeg"],
+)
+def test_builder_arguments_reject_anything_but_a_builder_id(client, bad):
+    with pytest.raises(ValueError, match="builder_id"):
+        validate_builder_id(bad)
+    with pytest.raises(ValueError, match="builder_id"):
+        client.create_order_rest_json(2054, True, 1700, 0.01, builder=bad, builder_fee_bps=3)
+    with pytest.raises(ValueError, match="builder_id"):
+        client.create_order_ws_json(2054, True, 1700, 0.01, builder=bad, builder_fee_bps=3)
+    with pytest.raises(ValueError, match="builder_id"):
+        client.approve_builder(bad, max_fee_bps=5)
+    with pytest.raises(ValueError, match="builder_id"):
+        client.revoke_builder(bad)
+    with pytest.raises(ValueError, match="builder_id"):
+        client.get_builder(bad)
     assert client.client.calls == []
-
-
-def test_resolve_builder_code_uses_public_lookup(client):
-    url = "https://api-testnet.aevo.xyz/builders/copilot"
-    client.client.responses[("GET", url)] = FakeResponse(
-        200, {"builder_id": BUILDER_ID, "builder_code": "copilot", "status": "ACTIVE"}
-    )
-    assert client.resolve_builder_id("copilot") == BUILDER_ID
-    assert client.client.calls == [("GET", url, {})]
-
-
-def test_resolve_unknown_builder_code_fails_loudly(client):
-    client.client.responses[("GET", "https://api-testnet.aevo.xyz/builders/nope")] = (
-        FakeResponse(404, {"error": "BUILDER_NOT_FOUND"})
-    )
-    with pytest.raises(ValueError, match="BUILDER_NOT_FOUND"):
-        client.resolve_builder_id("nope")
-
-
-def test_resolve_malformed_builder_id_from_server_fails(client):
-    client.client.responses[("GET", "https://api-testnet.aevo.xyz/builders/copilot")] = (
-        FakeResponse(200, {"builder_id": "not-a-builder"})
-    )
-    with pytest.raises(ValueError, match="malformed"):
-        client.resolve_builder_id("copilot")
 
 
 # Approval / revoke
 
 
-def test_approve_builder_by_code(client):
-    client.client.responses[("GET", "https://api-testnet.aevo.xyz/builders/copilot")] = (
-        FakeResponse(200, {"builder_id": BUILDER_ID})
-    )
-    client.approve_builder("copilot", max_fee_bps=5)
+def test_approve_builder(client):
+    client.approve_builder(BUILDER_ID, max_fee_bps=5)
+    assert len(client.client.calls) == 1
     method, url, kwargs = client.client.calls[-1]
     assert (method, url) == ("POST", "https://api-testnet.aevo.xyz/builder/approve")
     body = kwargs["json"]
@@ -313,18 +311,18 @@ def test_revoke_builder(client):
 
 
 def test_register_and_public_reads(client):
-    client.register_builder("copilot", "Copilot")
-    client.get_builder("copilot")
+    client.register_builder("Copilot")
+    client.get_builder(BUILDER_ID)
     client.get_builder_config()
     client.get_builder_approvals()
     calls = [(m, u) for m, u, _ in client.client.calls]
     assert calls == [
         ("POST", "https://api-testnet.aevo.xyz/builder/register"),
-        ("GET", "https://api-testnet.aevo.xyz/builders/copilot"),
+        ("GET", f"https://api-testnet.aevo.xyz/builders/{BUILDER_ID}"),
         ("GET", "https://api-testnet.aevo.xyz/builder-config"),
         ("GET", "https://api-testnet.aevo.xyz/account/builder-approvals"),
     ]
-    assert client.client.calls[0][2]["json"] == {"builder_code": "copilot", "name": "Copilot"}
+    assert client.client.calls[0][2]["json"] == {"name": "Copilot"}
 
 
 def test_reporting_params(client):

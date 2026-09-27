@@ -5,7 +5,6 @@ import re
 import time
 import traceback
 from decimal import Decimal, InvalidOperation
-from urllib.parse import quote
 
 import requests
 import websockets
@@ -100,6 +99,15 @@ class ApproveBuilder(EIP712Struct):
 BUILDER_ID_PATTERN = re.compile(r"^builder_[0-9a-f]{16}$")
 RATE_DECIMALS = 6
 _DECIMAL_PATTERN = re.compile(r"^[0-9]+(\.[0-9]+)?$")
+
+
+def validate_builder_id(builder_id):
+    """Return builder_id if it is a well-formed builder_<16 hex> id, else raise."""
+    if not isinstance(builder_id, str) or not BUILDER_ID_PATTERN.match(builder_id):
+        raise ValueError(
+            f"builder must be a builder_id like builder_<16 hex>, got {builder_id!r}"
+        )
+    return builder_id
 
 
 def _parse_decimal(value, name):
@@ -441,9 +449,9 @@ class AevoClient:
             return req.text()
 
     # Builder Codes: public REST API
-    def get_builder(self, builder_code):
+    def get_builder(self, builder_id):
         req = self.client.get(
-            f"{self.rest_url}/builders/{quote(str(builder_code), safe='')}"
+            f"{self.rest_url}/builders/{validate_builder_id(builder_id)}"
         )
         return req.json()
 
@@ -463,7 +471,7 @@ class AevoClient:
         return req.json()
 
     def revoke_builder(self, builder):
-        data = {"builder_id": self.resolve_builder_id(builder)}
+        data = {"builder_id": validate_builder_id(builder)}
         req = self.client.post(
             f"{self.rest_url}/builder/revoke", json=data, headers=self.rest_headers
         )
@@ -476,8 +484,8 @@ class AevoClient:
         return req.json()
 
     # Builder Codes: builder (fee account) REST API
-    def register_builder(self, builder_code, name):
-        data = {"builder_code": builder_code, "name": name}
+    def register_builder(self, name):
+        data = {"name": name}
         req = self.client.post(
             f"{self.rest_url}/builder/register", json=data, headers=self.rest_headers
         )
@@ -544,34 +552,9 @@ class AevoClient:
         return req.json()
 
     # Builder Codes: signing helpers
-    def resolve_builder_id(self, builder):
-        """Return the builder_id for a builder_id or a public builder_code."""
-        if not isinstance(builder, str) or not builder:
-            raise ValueError(f"builder must be a builder_id or builder_code, got {builder!r}")
-        if BUILDER_ID_PATTERN.match(builder):
-            return builder
-
-        req = self.client.get(
-            f"{self.rest_url}/builders/{quote(builder, safe='')}"
-        )
-        try:
-            data = req.json()
-        except ValueError:
-            data = None
-        builder_id = data.get("builder_id") if isinstance(data, dict) else None
-        if req.status_code != 200 or not isinstance(builder_id, str):
-            raise ValueError(
-                f"could not resolve builder code {builder!r}: HTTP {req.status_code} {req.text}"
-            )
-        if not BUILDER_ID_PATTERN.match(builder_id):
-            raise ValueError(
-                f"builder code {builder!r} resolved to malformed builder_id {builder_id!r}"
-            )
-        return builder_id
-
     def create_approve_builder_json(self, builder, max_fee_bps=None, max_fee_rate=None):
         max_fee_rate = _fee_rate(max_fee_bps, max_fee_rate, "max_fee")
-        builder_id = self.resolve_builder_id(builder)
+        builder_id = validate_builder_id(builder)
         nonce = time.time_ns() // 1_000_000  # unix milliseconds
         signature, approval_hash = self.sign_approve_builder(
             builder_id, max_fee_rate, nonce
@@ -615,7 +598,7 @@ class AevoClient:
                 raise ValueError("builder_fee_bps/builder_fee_rate require builder")
             return None, None
         rate = _fee_rate(builder_fee_bps, builder_fee_rate, "builder_fee")
-        return self.resolve_builder_id(builder), rate
+        return validate_builder_id(builder), rate
 
     # Public WS Subscriptions
     async def subscribe_tickers(self, asset):

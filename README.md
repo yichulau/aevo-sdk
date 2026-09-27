@@ -113,7 +113,7 @@ It can be tested by running `python order_rest_example.py`.
 
 Builder Codes let an app (a "builder") attach a builder fee to its users' perpetual orders once the user has approved that builder. The builder fee is separate from the Aevo fee. It is debited from the user in USDC and credited to the builder's fee account. See `builder_example.py` for a full flow. It is dry-run by default and only sends when `SEND=1` is set.
 
-A builder is identified by its `builder_id` (`builder_<16 hex>`, which is what gets signed) and by an optional public, immutable `builder_code` (for example `copilot`). SDK methods that take `builder` accept either one. A code is resolved to its `builder_id` with `GET /builders/{code}`. On hot order paths, pass the `builder_id` directly to skip that lookup.
+A builder is identified only by its `builder_id` (`builder_<16 hex>`). Aevo generates it when the builder registers, builders never choose it, and it is the value that gets signed. SDK methods that take `builder` expect a `builder_id` and raise `ValueError` for anything else.
 
 ### Fee units
 
@@ -137,12 +137,12 @@ aevo.get_builder_config()  # {"max_fee_rate_perps": "0.0005", "min_create_balanc
 Any account can register one builder for itself, using its own API key. Registration needs a USDC balance of at least `min_create_balance`. If that value is `null`, self-service registration is disabled.
 
 ```python
-aevo.register_builder(builder_code="copilot", name="Copilot")
-# {"success": true, "builder_id": "builder_...", "builder_code": "copilot"}
-aevo.get_builder("copilot")  # public profile: builder_id, builder_code, name, status
+aevo.register_builder(name="Copilot")
+# {"success": true, "builder_id": "builder_0123456789abcdef"}
+aevo.get_builder("builder_0123456789abcdef")  # public profile: builder_id, name, status
 ```
 
-`builder_code` must match `^[a-z0-9]{3,16}$`. It must also be unique and not reserved (`aevo`, `admin`, `api`, `builder`, `builders`), and it cannot be changed later.
+Share the returned `builder_id` with your users. It is what they approve and what your orders carry.
 
 ### Approval (user)
 
@@ -157,9 +157,10 @@ aevo = AevoClient(
     api_secret=os.environ["AEVO_API_SECRET"],
     env="testnet",
 )
-aevo.approve_builder("copilot", max_fee_bps=5)  # POST /builder/approve
-aevo.get_builder_approvals()                    # GET /account/builder-approvals
-aevo.revoke_builder("copilot")                  # POST /builder/revoke
+builder_id = "builder_0123456789abcdef"
+aevo.approve_builder(builder_id, max_fee_bps=5)  # POST /builder/approve
+aevo.get_builder_approvals()                     # GET /account/builder-approvals
+aevo.revoke_builder(builder_id)                  # POST /builder/revoke
 ```
 
 ### Attribution on orders
@@ -192,7 +193,8 @@ The order fee must be at or below both the user's approved max and the protocol 
 | `BUILDER_INVALID_FEE_RATE` | The rate is malformed |
 | `BUILDER_INVALID_SIGNATURE`, `BUILDER_INVALID_NONCE` | The approval signature is invalid, or the nonce was replayed |
 | `BUILDER_NOT_SUPPORTED` | Builder fields were sent on an unsupported path |
-| `BUILDER_INVALID_CODE`, `BUILDER_CODE_TAKEN`, `BUILDER_INVALID_NAME` | Registration input was rejected |
+| `BUILDER_INVALID_ID` | The builder id is malformed |
+| `BUILDER_INVALID_NAME` | The registration name was rejected |
 | `BUILDER_ALREADY_EXISTS` | The account already owns a builder |
 | `BUILDER_SELF_SERVICE_DISABLED`, `BUILDER_INSUFFICIENT_BALANCE` | Registration is disabled, or the USDC balance is below `min_create_balance` |
 | `INVALID_PERIOD`, `CSV_RANGE_TOO_LARGE` | The reporting window is invalid, or the window is too large for the CSV export (50,000 rows max) |

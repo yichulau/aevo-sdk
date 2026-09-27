@@ -2,7 +2,7 @@
 builder attribution.
 
 DRY-RUN by default: it signs everything and prints the payloads, but sends
-nothing except public reads (builder lookup, instrument, orderbook). Set
+nothing except public reads (instrument, orderbook). Set
 SEND=1 to actually approve and place the order.
 
 Environment (defaults in brackets):
@@ -11,7 +11,7 @@ Environment (defaults in brackets):
     AEVO_WALLET_ADDRESS                [derived from the wallet key]
     AEVO_SIGNING_KEY                   [wallet key] key used to sign orders
     AEVO_API_KEY / AEVO_API_SECRET     required when SEND=1
-    BUILDER                            builder code (e.g. "copilot") or builder_id
+    BUILDER_ID                         e.g. builder_0123456789abcdef
     MAX_FEE_BPS             [5]        max fee the user approves, in bps
     BUILDER_FEE_BPS         [3]        fee charged on this order, in bps
     INSTRUMENT              [ETH-PERP]
@@ -27,7 +27,7 @@ from decimal import Decimal
 
 from eth_account import Account
 
-from aevo import AevoClient
+from aevo import AevoClient, validate_builder_id
 
 
 def env(name, default=None):
@@ -54,7 +54,7 @@ def main():
         env=os.environ.get("AEVO_ENV", "testnet"),
     )
 
-    builder = env("BUILDER")
+    builder_id = validate_builder_id(env("BUILDER_ID"))
     max_fee_bps = os.environ.get("MAX_FEE_BPS", "5")
     builder_fee_bps = os.environ.get("BUILDER_FEE_BPS", "3")
     instrument = os.environ.get("INSTRUMENT", "ETH-PERP")
@@ -62,10 +62,7 @@ def main():
     amount = Decimal(os.environ.get("AMOUNT", "0.01"))
     slippage = Decimal(os.environ.get("SLIPPAGE", "0.01"))
 
-    print(f"env={aevo.env} wallet={wallet_address} builder={builder} send={send}")
-
-    # Resolve once so the approval and the order use the same builder_id.
-    builder_id = aevo.resolve_builder_id(builder)
+    print(f"env={aevo.env} wallet={wallet_address} builder={builder_id} send={send}")
 
     # 1. Approval, signed by the WALLET key.
     approval, approval_hash = aevo.create_approve_builder_json(
