@@ -179,7 +179,9 @@ aevo.rest_create_order(
 )
 ```
 
-The order fee must be at or below both the user's approved max and the protocol cap. Builder attribution applies only to signed perpetual orders.
+The order fee must be at or below both the user's approved max and the protocol cap. Builder attribution applies to signed perpetual and option orders; signing is identical for both.
+
+**Options:** the builder fee on an option fill is `min(builder_fee_rate × index price × contracts, option_premium_cap × premium × contracts)`, the same shape as Aevo's own option fee. The rate must also be at or below the options cap. Read both limits from `get_builder_config()`, as `max_fee_rate_options` and `option_premium_cap`. Builder fees on options are disabled while either is `null`.
 
 ### Error codes
 
