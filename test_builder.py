@@ -327,16 +327,43 @@ def test_register_and_public_reads(client):
 
 def test_reporting_params(client):
     client.get_builder_stats(period="7d")
-    client.get_builder_markets(start_time=1, end_time=2)
-    client.get_builder_users(period="30d", limit=10, cursor="abc")
-    client.get_builder_fills(instrument="ETH-PERP", limit=5)
+    client.get_builder_markets(start_time=1, end_time=2, limit=100, offset=200)
+    client.get_builder_users(period="30d", limit=10, offset=20)
+    client.get_builder_users(period="7d", limit=50, cursor="abc")
+    client.get_builder_fills(instrument="ETH-PERP", limit=5, offset=15)
     got = [(u.rsplit("/", 1)[1], kw["params"]) for _, u, kw in client.client.calls]
     assert got == [
         ("stats", {"period": "7d"}),
-        ("markets", {"start_time": 1, "end_time": 2}),
-        ("users", {"period": "30d", "limit": 10, "cursor": "abc"}),
-        ("fills", {"instrument": "ETH-PERP", "limit": 5}),
+        ("markets", {"start_time": 1, "end_time": 2, "limit": 100, "offset": 200}),
+        ("users", {"period": "30d", "limit": 10, "offset": 20}),
+        ("users", {"period": "7d", "limit": 50, "cursor": "abc"}),
+        ("fills", {"instrument": "ETH-PERP", "limit": 5, "offset": 15}),
     ]
+
+
+def test_reporting_omits_none_params(client):
+    client.get_builder_markets(limit=None, offset=None)
+    client.get_builder_users(period="7d", limit=None, cursor=None, offset=None)
+    client.get_builder_fills(instrument="ETH-PERP", limit=None, cursor=None, offset=None)
+    got = [(u.rsplit("/", 1)[1], kw["params"]) for _, u, kw in client.client.calls]
+    assert got == [
+        ("markets", {}),
+        ("users", {"period": "7d"}),
+        ("fills", {"instrument": "ETH-PERP"}),
+    ]
+
+
+@pytest.mark.parametrize(
+    "method,kwargs",
+    [
+        ("get_builder_users", {"period": "7d", "cursor": "abc", "offset": 50}),
+        ("get_builder_fills", {"cursor": "abc", "offset": 50}),
+    ],
+)
+def test_reporting_rejects_cursor_with_offset(client, method, kwargs):
+    with pytest.raises(ValueError, match="either cursor or offset"):
+        getattr(client, method)(**kwargs)
+    assert client.client.calls == []
 
 
 def test_download_builder_fills_csv(client, tmp_path):

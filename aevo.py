@@ -496,14 +496,24 @@ class AevoClient:
             "stats", period=period, start_time=start_time, end_time=end_time
         )
 
-    def get_builder_markets(self, period=None, start_time=None, end_time=None):
+    def get_builder_markets(
+        self, period=None, start_time=None, end_time=None, limit=None, offset=None
+    ):
         return self._builder_report(
-            "markets", period=period, start_time=start_time, end_time=end_time
+            "markets",
+            period=period,
+            start_time=start_time,
+            end_time=end_time,
+            limit=limit,
+            offset=offset,
         )
 
     def get_builder_users(
-        self, period=None, start_time=None, end_time=None, limit=None, cursor=None
+        self, period=None, start_time=None, end_time=None, limit=None, cursor=None,
+        offset=None
     ):
+        if cursor is not None and offset is not None:
+            raise ValueError("pass either cursor or offset, not both")
         return self._builder_report(
             "users",
             period=period,
@@ -511,11 +521,15 @@ class AevoClient:
             end_time=end_time,
             limit=limit,
             cursor=cursor,
+            offset=offset,
         )
 
     def get_builder_fills(
-        self, start_time=None, end_time=None, instrument=None, limit=None, cursor=None
+        self, start_time=None, end_time=None, instrument=None, limit=None, cursor=None,
+        offset=None
     ):
+        if cursor is not None and offset is not None:
+            raise ValueError("pass either cursor or offset, not both")
         return self._builder_report(
             "fills",
             start_time=start_time,
@@ -523,6 +537,7 @@ class AevoClient:
             instrument=instrument,
             limit=limit,
             cursor=cursor,
+            offset=offset,
         )
 
     def download_builder_fills_csv(

@@ -111,7 +111,7 @@ It can be tested by running `python order_rest_example.py`.
 
 ## Builder Codes
 
-Builder Codes let an app (a "builder") attach a builder fee to its users' perpetual orders once the user has approved that builder. The builder fee is separate from the Aevo fee. It is debited from the user in USDC and credited to the builder's fee account. See `builder_example.py` for a full flow. It is dry-run by default and only sends when `SEND=1` is set.
+Builder Codes let an app (a "builder") attach a builder fee to its users' perpetual and option orders once the user has approved that builder. The builder fee is separate from the Aevo fee. It is debited from the user in USDC and credited to the builder's fee account. See `builder_example.py` for a full flow. It is dry-run by default and only sends when `SEND=1` is set.
 
 A builder is identified only by its `builder_id` (`builder_<16 hex>`). Aevo generates it when the builder registers, builders never choose it, and it is the value that gets signed. SDK methods that take `builder` expect a `builder_id` and raise `ValueError` for anything else.
 
@@ -126,10 +126,12 @@ bps_to_rate(5)         # "0.0005"
 rate_to_raw("0.0005")  # 500
 ```
 
-Read the protocol cap before choosing fees. An approval or order fee above `max_fee_rate_perps` is rejected, and a `null` cap means builder fees are disabled:
+Read the protocol caps before choosing fees. An approval above `max_fee_rate_perps` is rejected. An order fee above `max_fee_rate_perps` (perpetuals) or `max_fee_rate_options` (options) is rejected. A `null` cap means builder fees are disabled for that instrument type:
 
 ```python
-aevo.get_builder_config()  # {"max_fee_rate_perps": "0.0005", "min_create_balance": "100"}
+aevo.get_builder_config()
+# {"max_fee_rate_perps": "0.0005", "min_create_balance": "100",
+#  "max_fee_rate_options": "0.0003", "option_premium_cap": "0.05"}
 ```
 
 ### Registration (builder)
@@ -146,7 +148,7 @@ Share the returned `builder_id` with your users. It is what they approve and wha
 
 ### Approval (user)
 
-The user approves a builder once, up to a maximum fee rate. The approval is signed with the wallet key, so `wallet_private_key` must be set, and a signing key is not accepted. The nonce is the current time in unix milliseconds.
+The user approves a builder once, up to a maximum fee rate. The approval is signed with the wallet key, so `wallet_private_key` must be set, and a signing key is not accepted. The nonce is the current time in unix milliseconds; the server accepts values at most 5 minutes old and at most 30 seconds in the future, so do not future-date it.
 
 ```python
 aevo = AevoClient(
@@ -198,6 +200,7 @@ The order fee must be at or below both the user's approved max and the protocol 
 | `BUILDER_INVALID_ID` | The builder id is malformed |
 | `BUILDER_INVALID_NAME` | The registration name was rejected |
 | `BUILDER_ALREADY_EXISTS` | The account already owns a builder |
+| `BUILDER_CURSOR_WITH_OFFSET` | Reporting pagination sent both `cursor` and `offset` |
 | `BUILDER_SELF_SERVICE_DISABLED`, `BUILDER_INSUFFICIENT_BALANCE` | Registration is disabled, or the USDC balance is below `min_create_balance` |
 | `INVALID_PERIOD`, `CSV_RANGE_TOO_LARGE` | The reporting window is invalid, or the window is too large for the CSV export (50,000 rows max) |
 
@@ -205,11 +208,14 @@ The order fee must be at or below both the user's approved max and the protocol 
 
 Reporting uses the builder fee account's own API key, and the builder is derived from that key. Pick a window with either `period` (`24h`, `7d`, `30d` or `90d`) or `start_time` and `end_time` in unix nanoseconds, and don't combine the two.
 
+`/builder/users`, `/builder/fills` and `/builder/markets` accept numbered pagination with `limit` and `offset`, where `offset` is the number of rows to skip. `limit` defaults to 50 and is capped at 200. Paginated responses include `count` as a string total before pagination. `/builder/users` and `/builder/fills` also support cursor pagination with `next_cursor`; offset pages do not include `next_cursor`, and you should not send both `cursor` and `offset`. `/builder/markets` returns every market when `limit` and `offset` are both omitted.
+
 ```python
 aevo.get_builder_stats(period="30d")
-aevo.get_builder_markets(start_time=start_ns, end_time=end_ns)
+aevo.get_builder_markets(start_time=start_ns, end_time=end_ns, limit=200, offset=0)
 aevo.get_builder_users(period="7d", limit=50, cursor=None)  # paginate with next_cursor
-aevo.get_builder_fills(start_time=start_ns, end_time=end_ns, instrument="ETH-PERP")
+aevo.get_builder_users(period="7d", limit=50, offset=100)   # numbered page
+aevo.get_builder_fills(start_time=start_ns, end_time=end_ns, instrument="ETH-PERP", limit=200, offset=0)
 aevo.download_builder_fills_csv("fills.csv", start_time=start_ns, end_time=end_ns)
 ```
 
